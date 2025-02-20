@@ -1,128 +1,113 @@
-Dockerizing a Symfony App - Step by Step Guide
+# Dockerizing a Symfony App - Step by Step Guide
 
-Step 1: Install Docker & Docker Compose
+## Step 1: Install Docker & Docker Compose
 
-Ensure Docker and Docker Compose are installed on your system. Check installation using:
+Ensure Docker and Docker Compose are installed on your system. Verify the installation:
 
-$ docker -v
-
-$ docker-compose -v
-
+```bash
+docker -v
+docker-compose -v
 Step 2: Create Required Files
-
 1. Dockerfile
+Dockerfile
 
 FROM php:8.2-apache
 
-RUN apt-get update && apt-get install -y libicu-dev libpq-dev unzip git && docker-php-ext-install intl pdo pdo_mysql
+# Install necessary extensions and tools
+RUN apt-get update && apt-get install -y \
+    libicu-dev \
+    libpq-dev \
+    unzip \
+    git \
+    libzip-dev \ # For zip archive manipulation (often needed by Composer)
+    && docker-php-ext-install intl pdo pdo_mysql zip \
+    && a2enmod rewrite
 
-RUN a2enmod rewrite
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
+# Copy project files *after* installing Composer to leverage Docker layer caching
 COPY . .
 
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+# Install project dependencies
+RUN composer install --no-interaction --no-progress --no-dev --optimize-autoloader
 
-RUN composer install --no-interaction --no-progress --no-dev
+# Set file permissions (important for Symfony)
+RUN chown -R www-data:www-data /var/www/html/var /var/www/html/public
 
-RUN chown -R www-data:www-data /var/www/html/var
-
+# Expose port (adjust if needed)
 EXPOSE 80
 
+# Start Apache in the foreground
 CMD ["apache2-foreground"]
-
 2. docker-compose.yml
+YAML
 
 version: '3.8'
 
 services:
-
   app:
-
     build:
-
       context: .
-
       dockerfile: Dockerfile
-
     container_name: symfony_app
-
     restart: always
-
     working_dir: /var/www/html
-
     volumes:
-
-      - .:/var/www/html
-
+      - ./:/var/www/html:cached # Use cached volume for performance on macOS/Windows
+      - symfony_logs:/var/www/html/var/log # Mount logs to a volume
     ports:
-
-      - "8080:80"
-
+      - "8080:80" # Host:Container
     depends_on:
-
       - db
-
-
+    environment:
+      - APP_ENV=dev # Set Symfony environment (important!)
+      - DATABASE_URL="mysql://symfony:symfony@symfony_db:3306/symfony?serverVersion=8.0&charset=utf8mb4" # Or use .env file (see below)
 
   db:
-
     image: mysql:8
-
     container_name: symfony_db
-
     restart: always
-
     environment:
-
-      MYSQL_ROOT_PASSWORD: root
-
+      MYSQL_ROOT_PASSWORD: root # Change this for production!
       MYSQL_DATABASE: symfony
-
       MYSQL_USER: symfony
-
       MYSQL_PASSWORD: symfony
-
     ports:
-
-      - "3306:3306"
-
+      - "3306:3306" # Only expose if needed externally (not recommended for production)
     volumes:
-
       - db_data:/var/lib/mysql
 
-
-
 volumes:
-
   db_data:
-
+  symfony_logs: # Volume for Symfony logs
 Step 3: Configure Symfony Database Connection
+Option 1: Environment Variables (Recommended for Docker): Set DATABASE_URL directly in docker-compose.yml (as shown above). This is generally preferred for Docker environments.
 
-Update the `.env` file in Symfony:
-
-DATABASE_URL="mysql://symfony:symfony@symfony_db:3306/symfony?serverVersion=8.0&charset=utf8mb4"
+Option 2: .env file (For Local Development): If you prefer using a .env file for local development outside of Docker, you can keep the DATABASE_URL in your .env file. However, for Docker, environment variables are usually better. Make sure your .env file is not copied into the Docker image (add .env to your .dockerignore file).
 
 Step 4: Build & Start Docker Containers
+Bash
 
-$ docker-compose up -d --build
-
+docker-compose up -d --build
 Step 5: Verify Running Containers
+Bash
 
-$ docker ps
-
+docker ps
 Step 6: Run Symfony Migrations
+Bash
 
-$ docker exec -it symfony_app php bin/console doctrine:migrations:migrate
-
+docker exec -it symfony_app php bin/console doctrine:migrations:migrate
+# or for newer Symfony versions:
+docker exec -it symfony_app symfony doctrine:migrations:migrate
 Step 7: Access Symfony App
-
 Your Symfony app should be running at: http://localhost:8080
 
 Step 8: Stop & Remove Containers
+Bash
 
-$ docker-compose down
-
-$ docker-compose down -v
-
+docker-compose down
+# or to remove volumes as well:
+docker-compose down -v
